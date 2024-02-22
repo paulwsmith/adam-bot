@@ -119,67 +119,67 @@ impl Receiver {
         slice.first_discord_timestamp = 0;
         slice.bytes.clear();
 
-        if let Ok(text) = self.transcribe(&filename).await {
-            let text = text.to_lowercase();
-            // let mentioned = ["adam", "add", "i don't know"]
-            //     .iter()
-            //     .any(|s| text.contains(s));
-            let mentioned = false;
+        // if let Ok(text) = self.transcribe(&filename).await {
+        //     let text = text.to_lowercase();
+        //     // let mentioned = ["adam", "add", "i don't know"]
+        //     //     .iter()
+        //     //     .any(|s| text.contains(s));
+        //     let mentioned = false;
 
-            match text
-                .replace("adam", "")
-                .trim()
-                .chars()
-                .filter(|&c| c != ',' && c != '.' && c != '!')
-                .collect::<String>()
-                .as_str()
-            {
-                t if t.starts_with("play") || t.starts_with("clay") || t.starts_with("lay") => {
-                    let search = t.split_whitespace().skip(1).collect::<Vec<_>>().join(" ");
+        //     match text
+        //         .replace("adam", "")
+        //         .trim()
+        //         .chars()
+        //         .filter(|&c| c != ',' && c != '.' && c != '!')
+        //         .collect::<String>()
+        //         .as_str()
+        //     {
+        //         t if t.starts_with("play") || t.starts_with("clay") || t.starts_with("lay") => {
+        //             let search = t.split_whitespace().skip(1).collect::<Vec<_>>().join(" ");
 
-                    info!("Searching for {}", search);
+        //             info!("Searching for {}", search);
 
-                    let manager = songbird::get(&self.ctx).await.unwrap().clone();
+        //             let manager = songbird::get(&self.ctx).await.unwrap().clone();
 
-                    if let Some(handler_lock) = manager.get(self.guild_id) {
-                        let mut handler = handler_lock.lock().await;
+        //             if let Some(handler_lock) = manager.get(self.guild_id) {
+        //                 let mut handler = handler_lock.lock().await;
 
-                        let (youtube_dl, url) = find_song(&self.ctx, &search).await?;
+        //                 let (youtube_dl, url) = find_song(&self.ctx, &search).await?;
 
-                        info!("Queueing {}", url);
+        //                 info!("Queueing {}", url);
 
-                        let (input, _) =
-                            self.gen_audio(&format!("Queueing up, {}", &search)).await?;
-                        let _ = handler.play_input(input).set_volume(0.5);
+        //                 let (input, _) =
+        //                     self.gen_audio(&format!("Queueing up, {}", &search)).await?;
+        //                 let _ = handler.play_input(input).set_volume(0.5);
 
-                        let handle = handler.enqueue_input(youtube_dl.into()).await;
-                        let _ = handle.set_volume(0.05);
-                    }
-                }
-                t if t.starts_with("stop") => {
-                    let manager = songbird::get(&self.ctx).await.unwrap().clone();
+        //                 let handle = handler.enqueue_input(youtube_dl.into()).await;
+        //                 let _ = handle.set_volume(0.05);
+        //             }
+        //         }
+        //         t if t.starts_with("stop") => {
+        //             let manager = songbird::get(&self.ctx).await.unwrap().clone();
 
-                    if let Some(handler_lock) = manager.get(self.guild_id) {
-                        let mut handler = handler_lock.lock().await;
-                        let _ = handler.stop();
+        //             if let Some(handler_lock) = manager.get(self.guild_id) {
+        //                 let mut handler = handler_lock.lock().await;
+        //                 let _ = handler.stop();
 
-                        let queue = handler.queue();
-                        queue.stop();
+        //                 let queue = handler.queue();
+        //                 queue.stop();
 
-                        let (input, _) = self
-                            .gen_audio("Just say the word and I'll be back to play some tunes")
-                            .await?;
-                        let _ = handler.play_input(input).set_volume(0.5);
-                    }
-                }
-                t if mentioned => {
-                    let res = self.gen_response(&t).await?;
-                    let (input, duration) = self.gen_audio(&res).await?;
-                    self.play_audio(input, duration).await?;
-                }
-                _ => {}
-            }
-        }
+        //                 let (input, _) = self
+        //                     .gen_audio("Just say the word and I'll be back to play some tunes")
+        //                     .await?;
+        //                 let _ = handler.play_input(input).set_volume(0.5);
+        //             }
+        //         }
+        //         t if mentioned => {
+        //             let res = self.gen_response(&t).await?;
+        //             let (input, duration) = self.gen_audio(&res).await?;
+        //             self.play_audio(input, duration).await?;
+        //         }
+        //         _ => {}
+        //     }
+        // }
 
         Ok(())
     }
