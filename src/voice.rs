@@ -57,8 +57,10 @@ struct Slice {
 
 impl Receiver {
     pub fn new(ctx: Context, guild_id: GuildId) -> Self {
-        let openai_api_key = env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set");
-        let chat_model = env::var("MODEL").expect("MODEL not set");
+        // let openai_api_key = env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set");
+        // let chat_model = env::var("MODEL").expect("MODEL not set");
+        let openai_api_key = "";
+        let chat_model = "".to_string();
         let json_client = build_json_client(&openai_api_key).unwrap();
         let multipart_client = build_multipart_client(&openai_api_key).unwrap();
 
@@ -101,9 +103,10 @@ impl Receiver {
 
         if let Ok(text) = self.transcribe(&filename).await {
             let text = text.to_lowercase();
-            let mentioned = ["adam", "add", "i don't know"]
-                .iter()
-                .any(|s| text.contains(s));
+            // let mentioned = ["adam", "add", "i don't know"]
+            //     .iter()
+            //     .any(|s| text.contains(s));
+            let mentioned = false;
 
             match text
                 .replace("adam", "")
@@ -408,6 +411,6 @@ impl Bot {
             let _ = manager.remove(guild_id).await;
         }
 
-        let _ = fs::remove_dir_all("cache");
+        // let _ = fs::remove_dir_all("cache");
     }
 }

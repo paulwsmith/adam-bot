@@ -36,7 +36,7 @@ pub fn build_json_client(api_key: &str) -> Result<Client, Error> {
     let mut headers = HeaderMap::new();
 
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-    headers.insert(AUTHORIZATION, format!("Bearer {api_key}").parse().unwrap());
+    // headers.insert(AUTHORIZATION, format!("Bearer {api_key}").parse().unwrap());
 
     Client::builder().default_headers(headers).build()
 }

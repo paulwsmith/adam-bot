@@ -36,7 +36,9 @@ use crate::state::{HttpKey, ShardManagerContainer};
 #[async_trait]
 impl EventHandler for Bot {
     async fn message(&self, ctx: Context, msg: Message) {
+        info!("Message: {:?}", msg);
         if msg.author.id == BOT_ID {
+            info!("Ignoring self message");
             return;
         }
 
@@ -61,15 +63,18 @@ impl EventHandler for Bot {
         }
 
         if msg.mentions_me(&ctx.http).await.unwrap_or(false) {
+            info!("Mentions me!");
             self.send_msg(&ctx, &msg, "?").await;
+        } else {
+            info!("Doesn't mention me");
         }
 
         let content = msg.content.as_str().to_lowercase();
 
-        let mentioned = content.contains("adam");
+        let mentioned = content.to_lowercase().contains("lowerechelonbot") || content.to_lowercase().contains("tardbot");
         let dm = msg.is_private();
         let reply = if let Some(last) = self.get_last_2_msgs() {
-            last.0.author == msg.author.name && last.1.author == "adam"
+            last.0.author == msg.author.name && (last.1.author == "lowerechelonbot" || last.1.author == "tardbot")
         } else {
             false
         };
@@ -84,8 +89,9 @@ impl EventHandler for Bot {
         } else if content.contains("join") {
             self.join_channel(&ctx, &msg).await;
         } else if content.contains("leave") {
-            self.send_msg(&ctx, &msg, "fine then").await;
-            self.leave_channel(&ctx, &msg).await;
+            // self.send_msg(&ctx, &msg, "fine then").await;
+            self.send_msg(&ctx, &msg, "no way, I'm staying").await;
+            // self.leave_channel(&ctx, &msg).await;
         } else {
             self.gen_msg(&ctx, &msg).await;
         }
@@ -134,7 +140,11 @@ async fn main() {
     framework.configure(Configuration::new().owners(owners).prefix("~"));
 
     let yt_client = reqwest::Client::new();
-    let songbird_cfg = songbird::Config::default().decode_mode(DecodeMode::Decode);
+    let songbird_cfg = songbird::Config::default()
+        .decode_mode(DecodeMode::Decode)
+        // .playout_buffer_length(NonZeroUsize::new(48).unwrap())
+        // .playout_spike_length(NonZeroUsize::new(16).unwrap().into())
+        ;
 
     let mut client = Client::builder(token, intents)
         .event_handler(Bot::new())

@@ -10,13 +10,14 @@ use crate::openai::{ChatMessage, ChatRequest, OPENAI_API_URL};
 
 impl Bot {
     pub async fn gen_msg(&self, ctx: &Context, msg: &Message) {
-        let typing = msg.channel_id.start_typing(&ctx.http);
+        info!("Message handling disabled...");
+        // let typing = msg.channel_id.start_typing(&ctx.http);
 
-        if let Ok(text) = self.gen_with_prompt(&msg, SYS_PROMPT).await {
-            self.send_msg(&ctx, &msg, &text).await;
-        }
+        // if let Ok(text) = self.gen_with_prompt(&msg, SYS_PROMPT).await {
+        //     self.send_msg(&ctx, &msg, &text).await;
+        // }
 
-        typing.stop();
+        // typing.stop();
     }
 
     pub async fn gen_with_prompt(&self, msg: &Message, sys_prompt: &str) -> Result<String, Error> {
@@ -58,10 +59,10 @@ impl Bot {
 
     pub async fn handle_msg(&self, msg: &Message, res: &str) {
         info!("{}: {}", msg.author.name, msg.content);
-        info!("{}: {}", "adam", res);
+        info!("{}: {}", "tardbot", res);
 
         self.add_history(&msg.author.name, &msg.content);
-        self.add_history("adam", &res);
+        self.add_history("tardbot", &res);
     }
 
     pub async fn send_msg(&self, ctx: &Context, msg: &Message, res: &str) {

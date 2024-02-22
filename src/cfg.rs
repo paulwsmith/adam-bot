@@ -1,6 +1,6 @@
 pub const LOG_FILE: &str = "output.log";
 
-pub const BOT_ID: u64 = 1179957141688291498;
+pub const BOT_ID: u64 = 844335104255590431;
 
 pub const SYS_PROMPT: &str = "You will be receiving messages in the format: 'username: message'.
 If you see a username 'adam' in the conversation history, that was you.

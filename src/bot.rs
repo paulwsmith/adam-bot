@@ -15,8 +15,10 @@ pub struct Bot {
 
 impl Bot {
     pub fn new() -> Self {
-        let openai_api_key = env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set");
-        let model = env::var("MODEL").expect("MODEL not set");
+        // let openai_api_key = env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set");
+        // let model = env::var("MODEL").expect("MODEL not set");
+        let openai_api_key = "";
+        let model = "x".to_string();
 
         let client = build_json_client(&openai_api_key).expect("Failed to build OpenAI client");
 
