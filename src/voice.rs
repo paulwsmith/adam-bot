@@ -9,7 +9,7 @@ use hound::{SampleFormat, WavSpec, WavWriter};
 use log::{info, warn};
 use reqwest::multipart::{Form, Part};
 use serenity::all::GuildId;
-use serenity::async_trait;
+use serenity::{async_trait, FutureExt};
 use serenity::client::Context;
 use serenity::gateway::ActivityData;
 use serenity::model::channel::Message;
@@ -51,6 +51,7 @@ struct VoiceController {
     last_reply: Mutex<Option<VoiceReply>>,
 }
 
+#[derive(Clone)]
 struct Slice {
     user_id: u64,
     bytes: Vec<i16>,
@@ -379,6 +380,27 @@ impl EventHandler for Receiver {
 
                                 let diff_from_last_timestamp = discord_timestamp - slice.last_discord_timestamp;
                                 warn!("diff_from_last_timestamp: [{:?}]", diff_from_last_timestamp);
+
+                                if diff_from_last_timestamp > 20 && slice.bytes.len() > 0 {
+                                    // sometimes we get a tick that looks like it's continuous voice from before,
+                                    // but it's actually a delayed / new speech segment. 
+                                    // Flush to file and start a new segment with accurate timestamps, to preserve
+                                    // timing when consolidating into a single file.
+                                    info!("\tDiscord timestamp diff too large; clearing slice [{ssrc}]...");
+
+                                    if let Err(e) = self.process(&mut slice).await {
+                                        info!("Processing error: {:?}", e);
+                                    }
+                                    
+                                    // let mut prev_slice = slice.clone();
+                                    // self.process(&mut prev_slice);
+
+                                    // slice.timestamp = Utc::now();
+                                    // slice.first_discord_timestamp = discord_timestamp;
+                                    // slice.last_discord_timestamp = discord_timestamp;
+                                    // slice.bytes.clear();
+                                    // slice.bytes = bytes;
+                                }
 
                                 slice.bytes.append(&mut bytes);
                                 if slice.first_discord_timestamp == 0 {
