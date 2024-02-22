@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::{env, fs};
+use std::fs;
 
 use anyhow::Error;
 use chrono::{DateTime, Duration, Utc};
@@ -55,7 +55,15 @@ struct Slice {
     user_id: u64,
     bytes: Vec<i16>,
     timestamp: DateTime<Utc>,
+    first_discord_timestamp: u32,
+    last_discord_timestamp: u32,
 }
+
+fn compute_discord_timestamp(raw_discord_timestamp: Wrap32) -> u32 {
+    let mod_value = (raw_discord_timestamp.0 % Wrap32::new(48).0);
+    ((raw_discord_timestamp.0 - mod_value).0 / 48).into()
+}
+
 
 impl Receiver {
     pub fn new(ctx: Context, guild_id: GuildId) -> Self {
@@ -83,12 +91,17 @@ impl Receiver {
 
     async fn process(&self, slice: &mut Slice) -> Result<(), Error> {
         if let Ok(mut last_reply) = self.controller.last_reply.lock() {
+            info!("LAST_REPLY thing is TRUE!!!!");
             if let Some(reply) = last_reply.take() {
+                info!("\t NEXT THING is TRUE!!!!");
                 let elapsed = Utc::now() - reply.timestamp;
                 let remaining = reply.duration - elapsed;
 
                 if remaining > Duration::milliseconds(0) || slice.bytes.len() < 48000 {
+                    info!("\t\t FINAL THING TRUE! It's clearing shit");
                     slice.timestamp = Utc::now();
+                    slice.first_discord_timestamp = 0;
+                    slice.last_discord_timestamp = 0;
                     slice.bytes.clear();
 
                     return Ok(());
@@ -96,11 +109,14 @@ impl Receiver {
             }
         }
 
-        let filename = format!("cache/{}_{}.wav", slice.user_id, Utc::now().timestamp());
+        // let filename = format!("cache/{}_{}.wav", slice.user_id, slice.timestamp.timestamp_millis());
+        info!("Saving file. slice.timestamp: [{}], slice.discord_timestamp: [{:?}], Utc.now: [{}]", slice.timestamp.timestamp_millis(), slice.first_discord_timestamp, Utc::now().timestamp_millis());
+        let filename = format!("cache/{}_{}_{}_{}.wav", slice.user_id, slice.timestamp.timestamp_millis(), slice.first_discord_timestamp, Utc::now().timestamp_millis());
 
         self.save(&slice.bytes, &filename);
 
         slice.timestamp = Utc::now();
+        slice.first_discord_timestamp = 0;
         slice.bytes.clear();
 
         if let Ok(text) = self.transcribe(&filename).await {
@@ -294,12 +310,13 @@ impl EventHandler for Receiver {
     async fn act(&self, ctx: &Ctx<'_>) -> Option<Event> {
         match ctx {
             Ctx::SpeakingStateUpdate(Speaking {
+                delay,
                 speaking: _,
                 ssrc,
                 user_id: Some(user_id),
                 ..
             }) => {
-                info!("{:?} speaking", ssrc);
+                info!("{:?} speaking; delay: {:#?}", ssrc, delay);
 
                 self.controller.known_ssrcs.insert(*ssrc, *user_id);
 
@@ -307,14 +324,19 @@ impl EventHandler for Receiver {
                     user_id: user_id.0,
                     bytes: Vec::new(),
                     timestamp: Utc::now(),
+                    first_discord_timestamp: 0,
+                    last_discord_timestamp: 0,
                 });
             }
             Ctx::VoiceTick(tick) => {
                 let speaking = tick.speaking.len();
+                // info!("VoiceTick: speaking: {}", speaking);
                 let last_tick_was_empty =
                     self.controller.last_tick_was_empty.load(Ordering::SeqCst);
+                // info!("\tlast_tick_was_empty: {}", last_tick_was_empty);
 
                 if speaking == 0 && !last_tick_was_empty {
+                    info!("VoiceTick: store/process section...");
                     self.controller
                         .last_tick_was_empty
                         .store(true, Ordering::SeqCst);
@@ -328,23 +350,54 @@ impl EventHandler for Receiver {
                         }
                     }
                 } else if speaking != 0 {
+                    // info!("VoiceTick: speaking... length: {}", speaking);
                     self.controller
                         .last_tick_was_empty
                         .store(false, Ordering::SeqCst);
 
                     for (ssrc, data) in &tick.speaking {
+                        // data.packet.
                         if let Some(decoded_voice) = data.decoded_voice.as_ref() {
                             let mut bytes = decoded_voice.to_owned();
 
+                            let discord_timestamp = compute_discord_timestamp(data.packet.as_ref().unwrap().rtp().get_timestamp());
+
+                            // if let Some(packet) = &data.packet {
+                            //     let rtp = packet.rtp();
+                            //     // let rtcp
+                            //     println!(
+                            //         "\t{ssrc}: packet seq {} ts {}",
+                            //         rtp.get_sequence().0,
+                            //         rtp.get_timestamp().0
+                            //     );
+                            // } else {
+                            //     println!("\t{ssrc}: Missed packet");
+                            // }
+
                             if let Some(mut slice) = self.controller.accumulator.get_mut(&ssrc) {
+                                info!("VoiceTick: appending bytes [{ssrc}]...");
+
+                                let diff_from_last_timestamp = discord_timestamp - slice.last_discord_timestamp;
+                                warn!("diff_from_last_timestamp: [{:?}]", diff_from_last_timestamp);
+
                                 slice.bytes.append(&mut bytes);
+                                if slice.first_discord_timestamp == 0 {
+                                    info!("\tdiscord_timestamp 0; setting timestamps [{ssrc}]");
+                                    slice.first_discord_timestamp = discord_timestamp;
+                                    slice.timestamp = Utc::now();
+                                }
+                                slice.last_discord_timestamp = discord_timestamp;
                             } else if let Some(user_id) = self.controller.known_ssrcs.get(ssrc) {
+                                info!("VoiceTick: creating new slice [{ssrc}]...");
+                                // let discord_timestamp = data.packet.as_ref().unwrap().rtp().get_timestamp().0.into();
                                 self.controller.accumulator.insert(
                                     *ssrc,
                                     Slice {
                                         user_id: user_id.0,
                                         bytes,
                                         timestamp: Utc::now(),
+                                        first_discord_timestamp: discord_timestamp,
+                                        last_discord_timestamp: discord_timestamp,
                                     },
                                 );
                             }
