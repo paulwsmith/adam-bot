@@ -39,13 +39,14 @@ print(files_by_speaker)
 # Combine files for each speaker, inserting silence as needed
 for speaker_id, files in files_by_speaker.items():
     print("\nspeaker_id:", speaker_id)
-    combined = AudioSegment.silent(duration=0)  # Start with an empty segment
+    combined = AudioSegment.silent(duration=0, frame_rate=12000)  # Start with an empty segment
     last_end_time = earliest_timestamp
 
     initial_timestamp_millis = files[0][1]
     
     last_timestamp_millis = files[0][1]
-    last_discord_timestamp = files[0][2]
+    # last_discord_timestamp = files[0][2]
+    last_discord_timestamp = 0
     last_now_timestamp = files[0][3]
 
     last_discord_offset = 0
@@ -54,8 +55,8 @@ for speaker_id, files in files_by_speaker.items():
         # print("timestamp:", timestamp)
         audio = AudioSegment.from_wav(os.path.join(directory, filename))
         discord_offset = timestamp_millis - discord_timestamp
-        print(f"\t*** OFFSET: [{discord_offset}] ***")
-        print(f"\t\t*** diff from previous offset: [{discord_offset - last_discord_offset}] ***")
+        print(f"\tOFFSET: [{discord_offset}]")
+        print(f"\t\tdiff from previous offset: [{discord_offset - last_discord_offset}]")
         last_discord_offset = discord_offset
 
         segment_length = len(audio)
@@ -63,19 +64,26 @@ for speaker_id, files in files_by_speaker.items():
         # print(f"\tlast_end_time: [{last_end_time}] timestamp_millis: [{timestamp_millis}] discord_timestamp: [{discord_timestamp}] now_timestamp: [{now_timestamp}] length in ms: [{len(audio)}]")
         # print(f"\t\tdiffs: millis: [{timestamp_millis - last_timestamp_millis}] discord: [{discord_timestamp - last_discord_timestamp}] now: [{now_timestamp - last_now_timestamp}]")
         
-        # silence_duration = timestamp_millis - last_end_time
-        silence_duration = (timestamp_millis - initial_timestamp_millis) - (combined.duration_seconds * 1000)
+        silence_duration = timestamp_millis - last_end_time
+        # silence_duration = (timestamp_millis - initial_timestamp_millis) - (combined.duration_seconds * 1000)
         discord_silence_duration = discord_timestamp - last_discord_timestamp
 
-        if discord_silence_duration < 250:
-            # print(f"\t\tdiscord_silence_duration: [{discord_silence_duration}]")
-            combined += AudioSegment.silent(duration=discord_silence_duration, frame_rate=12000)
+        silence = AudioSegment.silent(duration=0, frame_rate=12000)
+
+        if discord_silence_duration < 500:
+            print(f"\t\tdiscord_silence_duration: [{discord_silence_duration}]")
+            silence = AudioSegment.silent(duration=discord_silence_duration, frame_rate=12000)
         elif silence_duration > 0:
-            # print(f"\tsilence_duration: [{silence_duration}]")
-            combined += AudioSegment.silent(duration=silence_duration, frame_rate=12000)
+            print(f"\tsilence_duration: [{silence_duration}]")
+            silence = AudioSegment.silent(duration=silence_duration, frame_rate=12000)
+
+        combined += silence
         combined += audio
 
         last_end_time = timestamp_millis + len(audio)
+        if discord_silence_duration < 250:
+            last_end_time -= (silence_duration - discord_silence_duration)
+            print(f"\t*** subtracted [{silence_duration - discord_silence_duration}] from last_end_time ***")
 
         last_timestamp_millis = timestamp_millis + segment_length
         last_discord_timestamp = discord_timestamp + segment_length
