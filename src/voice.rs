@@ -6,7 +6,7 @@ use anyhow::Error;
 use chrono::{DateTime, Duration, Utc};
 use dashmap::DashMap;
 use hound::{SampleFormat, WavSpec, WavWriter};
-use log::info;
+use log::{info, warn};
 use reqwest::multipart::{Form, Part};
 use serenity::all::GuildId;
 use serenity::async_trait;
@@ -17,6 +17,8 @@ use songbird::input::codecs::{CODEC_REGISTRY, PROBE};
 use songbird::input::Input;
 use songbird::model::id::UserId;
 use songbird::model::payload::{ClientDisconnect, Speaking};
+use songbird::packet::wrap::Wrap32;
+use songbird::packet::rtcp;
 use songbird::{CoreEvent, Event, EventContext as Ctx, EventHandler};
 
 use crate::bot::Bot;
@@ -353,6 +355,78 @@ impl EventHandler for Receiver {
             Ctx::ClientDisconnect(ClientDisconnect { user_id, .. }) => {
                 info!("{:?} disconnected", user_id);
             }
+            Ctx::RtcpPacket(data) => {
+                // An event which fires for every received rtcp packet,
+                // containing the call statistics and reporting information.
+                // info!("RTCP packet received: {:?} offset: [{:?}] end_pad: [{:?}]", data.rtcp(), data.payload_offset, data.payload_end_pad);
+                let rtcp = data.rtcp();
+                match rtcp {
+                    rtcp::RtcpPacket::SenderReport(s) => {
+                        info!("RTCP packet received: {:?} offset: [{:?}] end_pad: [{:?}]", data.rtcp(), data.payload_offset, data.payload_end_pad);
+                        info!("SenderReport: {:?}", s);
+                    }
+                    rtcp::RtcpPacket::ReceiverReport(s) => {
+                        // info!("RTCP packet received: {:?} offset: [{:?}] end_pad: [{:?}]", data.rtcp(), data.payload_offset, data.payload_end_pad);
+                        // info!("ReceiverReport: {:?}", s);
+                    }
+                    rtcp::RtcpPacket::KnownType(_) => {
+                        info!("RTCP packet received: {:?} offset: [{:?}] end_pad: [{:?}]", data.rtcp(), data.payload_offset, data.payload_end_pad);
+                        info!("KnownType: {:?}", rtcp);
+                    }
+                    _ => {
+                        info!("RTCP packet received: {:?} offset: [{:?}] end_pad: [{:?}]", data.rtcp(), data.payload_offset, data.payload_end_pad);
+                        info!("Unknown RTCP packet: {:?}", rtcp);
+                    }
+                }
+                // data.rtcp().
+            },
+            // Ctx::RtpPacket(packet) => {
+            //     // An event which fires for every received audio packet,
+            //     // containing the decoded data.
+            //     let rtp = packet.rtp();
+            //     let pt = rtp.get_payload_type();
+            //     let pt_as_string = match pt {
+            //         songbird::packet::rtp::RtpType::Pcmu => "pcmu",
+            //             songbird::packet::rtp::RtpType::Gsm => "gsm",
+            //             songbird::packet::rtp::RtpType::G723 => "g723",
+            //             songbird::packet::rtp::RtpType::Dvi4(u) => "dvi4({})",
+            //             songbird::packet::rtp::RtpType::Lpc => "lpc",
+            //             songbird::packet::rtp::RtpType::Pcma => "pcma",
+            //             songbird::packet::rtp::RtpType::G722 => "g722",
+            //             songbird::packet::rtp::RtpType::L16Stereo => "l16_stereo",
+            //             songbird::packet::rtp::RtpType::L16Mono => "l16_mono",
+            //             songbird::packet::rtp::RtpType::Qcelp => "qcelp",
+            //             songbird::packet::rtp::RtpType::Cn => "cn",
+            //             songbird::packet::rtp::RtpType::Mpa => "mpa",
+            //             songbird::packet::rtp::RtpType::G728 => "g728",
+            //             songbird::packet::rtp::RtpType::G729 => "g729",
+            //             songbird::packet::rtp::RtpType::CelB => "celb",
+            //             songbird::packet::rtp::RtpType::Jpeg => "jpeg",
+            //             songbird::packet::rtp::RtpType::Nv => "nv",
+            //             songbird::packet::rtp::RtpType::H261 => "h261",
+            //             songbird::packet::rtp::RtpType::Mpv => "mpv",
+            //             songbird::packet::rtp::RtpType::Mp2t => "mp2t",
+            //             songbird::packet::rtp::RtpType::H263 => "h263",
+            //             // songbird::packet::rtp::RtpType::Dynamic(u) => format!("dynamic({})", u),
+            //             // songbird::packet::rtp::RtpType::Reserved(u) => format!("reserved({})", u),
+            //             // songbird::packet::rtp::RtpType::Unassigned(u) => format!("unassigned({})", u),
+            //             // songbird::packet::rtp::RtpType::Illegal(u) => format!("illegal({})", u),
+            //             _ => "unknown",
+            //         };
+                    
+            //     info!(
+            //         "Packet from SSRC [{}], sequence [{}], timestamp [{}] -- [{}]B long, CSRC count: [{}] CSRCs: [{:?}], PT: [{}], ext: [{}], marker: [{}]",
+            //         rtp.get_ssrc(),
+            //         rtp.get_sequence().0,
+            //         rtp.get_timestamp().0,
+            //         rtp.payload().len(),
+            //         rtp.get_csrc_count(),
+            //         rtp.get_csrc_list(),
+            //         pt_as_string,
+            //         rtp.get_extension(),
+            //         rtp.get_marker(),
+            //     );
+            // },
             _ => {}
         }
 
@@ -390,6 +464,8 @@ impl Bot {
 
                 handler.add_global_event(CoreEvent::SpeakingStateUpdate.into(), receiver.clone());
                 handler.add_global_event(CoreEvent::VoiceTick.into(), receiver.clone());
+                handler.add_global_event(CoreEvent::RtpPacket.into(), receiver.clone());
+                handler.add_global_event(CoreEvent::RtcpPacket.into(), receiver.clone());
                 handler.add_global_event(CoreEvent::ClientDisconnect.into(), receiver);
             }
         }
