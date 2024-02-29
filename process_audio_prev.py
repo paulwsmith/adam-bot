@@ -1,3 +1,4 @@
+import datetime
 from pydub import AudioSegment
 import os
 from collections import defaultdict
@@ -93,4 +94,6 @@ for speaker_id, files in files_by_speaker.items():
         # print("len(audio)", len(audio))
         # print("last_end_time", last_end_time)
     # Export combined audio for each speaker
-    combined.export(f"{directory}/output/combined_speaker_{speaker_id}.wav", format="wav")
+
+    combined.export(f"{directory}/output/{datetime.datetime.now().strftime('%Y-%m-%dT%H-%M-%S')}_speaker_{speaker_id}.wav", format="wav")
+    # combined.export(f"{directory}/output/combined_speaker_{speaker_id}.wav", format="wav")

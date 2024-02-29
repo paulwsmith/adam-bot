@@ -1,6 +1,6 @@
+use std::fs;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::fs;
 
 use anyhow::Error;
 use chrono::{DateTime, Duration, Utc};
@@ -9,16 +9,17 @@ use hound::{SampleFormat, WavSpec, WavWriter};
 use log::{info, warn};
 use reqwest::multipart::{Form, Part};
 use serenity::all::GuildId;
-use serenity::{async_trait, FutureExt};
 use serenity::client::Context;
 use serenity::gateway::ActivityData;
 use serenity::model::channel::Message;
+use serenity::{async_trait, FutureExt};
+use songbird::events::context_data::VoiceData;
 use songbird::input::codecs::{CODEC_REGISTRY, PROBE};
 use songbird::input::Input;
 use songbird::model::id::UserId;
 use songbird::model::payload::{ClientDisconnect, Speaking};
 use songbird::packet::wrap::Wrap32;
-use songbird::packet::rtcp;
+use songbird::packet::{discord, rtcp};
 use songbird::{CoreEvent, Event, EventContext as Ctx, EventHandler};
 
 use crate::bot::Bot;
@@ -60,11 +61,15 @@ struct Slice {
     last_discord_timestamp: u32,
 }
 
-fn compute_discord_timestamp(raw_discord_timestamp: Wrap32) -> u32 {
-    let mod_value = (raw_discord_timestamp.0 % Wrap32::new(48).0);
-    ((raw_discord_timestamp.0 - mod_value).0 / 48).into()
+fn get_discord_timestamp(data: &VoiceData) -> u32 {
+    if let Some(packet) = &data.packet {
+        let raw_discord_timestamp = packet.rtp().get_timestamp();
+        let mod_value = (raw_discord_timestamp.0 % Wrap32::new(48).0);
+        return ((raw_discord_timestamp.0 - mod_value).0 / 48).into();
+    }
+    warn!("No packet in VoiceData! Returning 0... data: [{:?}]", data);
+    0 // Return a default value if data.packet is None
 }
-
 
 impl Receiver {
     pub fn new(ctx: Context, guild_id: GuildId) -> Self {
@@ -111,8 +116,19 @@ impl Receiver {
         }
 
         // let filename = format!("cache/{}_{}.wav", slice.user_id, slice.timestamp.timestamp_millis());
-        info!("Saving file. slice.timestamp: [{}], slice.discord_timestamp: [{:?}], Utc.now: [{}]", slice.timestamp.timestamp_millis(), slice.first_discord_timestamp, Utc::now().timestamp_millis());
-        let filename = format!("cache/{}_{}_{}_{}.wav", slice.user_id, slice.timestamp.timestamp_millis(), slice.first_discord_timestamp, Utc::now().timestamp_millis());
+        info!(
+            "Saving file. slice.timestamp: [{}], slice.discord_timestamp: [{:?}], Utc.now: [{}]",
+            slice.timestamp.timestamp_millis(),
+            slice.first_discord_timestamp,
+            Utc::now().timestamp_millis()
+        );
+        let filename = format!(
+            "cache/{}_{}_{}_{}.wav",
+            slice.user_id,
+            slice.timestamp.timestamp_millis(),
+            slice.first_discord_timestamp,
+            Utc::now().timestamp_millis()
+        );
 
         self.save(&slice.bytes, &filename);
 
@@ -361,8 +377,6 @@ impl EventHandler for Receiver {
                         if let Some(decoded_voice) = data.decoded_voice.as_ref() {
                             let mut bytes = decoded_voice.to_owned();
 
-                            let discord_timestamp = compute_discord_timestamp(data.packet.as_ref().unwrap().rtp().get_timestamp());
-
                             // if let Some(packet) = &data.packet {
                             //     let rtp = packet.rtp();
                             //     // let rtcp
@@ -375,15 +389,18 @@ impl EventHandler for Receiver {
                             //     println!("\t{ssrc}: Missed packet");
                             // }
 
+                            let discord_timestamp = get_discord_timestamp(&data);
+
                             if let Some(mut slice) = self.controller.accumulator.get_mut(&ssrc) {
                                 info!("VoiceTick: appending bytes [{ssrc}]...");
 
-                                let diff_from_last_timestamp = discord_timestamp - slice.last_discord_timestamp;
+                                let diff_from_last_timestamp =
+                                    discord_timestamp - slice.last_discord_timestamp;
                                 warn!("diff_from_last_timestamp: [{:?}]", diff_from_last_timestamp);
 
                                 if diff_from_last_timestamp > 20 && slice.bytes.len() > 0 {
                                     // sometimes we get a tick that looks like it's continuous voice from before,
-                                    // but it's actually a delayed / new speech segment. 
+                                    // but it's actually a delayed / new speech segment.
                                     // Flush to file and start a new segment with accurate timestamps, to preserve
                                     // timing when consolidating into a single file.
                                     info!("\tDiscord timestamp diff too large; clearing slice [{ssrc}]...");
@@ -391,7 +408,7 @@ impl EventHandler for Receiver {
                                     if let Err(e) = self.process(&mut slice).await {
                                         info!("Processing error: {:?}", e);
                                     }
-                                    
+
                                     // let mut prev_slice = slice.clone();
                                     // self.process(&mut prev_slice);
 
@@ -405,10 +422,14 @@ impl EventHandler for Receiver {
                                 slice.bytes.append(&mut bytes);
                                 if slice.first_discord_timestamp == 0 {
                                     info!("\tdiscord_timestamp 0; setting timestamps [{ssrc}]");
-                                    slice.first_discord_timestamp = discord_timestamp;
+                                    if discord_timestamp > 0 {
+                                        slice.first_discord_timestamp = discord_timestamp;
+                                    }
                                     slice.timestamp = Utc::now();
                                 }
-                                slice.last_discord_timestamp = discord_timestamp;
+                                if discord_timestamp > 0 {
+                                    slice.last_discord_timestamp = discord_timestamp;
+                                }
                             } else if let Some(user_id) = self.controller.known_ssrcs.get(ssrc) {
                                 info!("VoiceTick: creating new slice [{ssrc}]...");
                                 // let discord_timestamp = data.packet.as_ref().unwrap().rtp().get_timestamp().0.into();
@@ -437,7 +458,12 @@ impl EventHandler for Receiver {
                 let rtcp = data.rtcp();
                 match rtcp {
                     rtcp::RtcpPacket::SenderReport(s) => {
-                        info!("RTCP packet received: {:?} offset: [{:?}] end_pad: [{:?}]", data.rtcp(), data.payload_offset, data.payload_end_pad);
+                        info!(
+                            "RTCP packet received: {:?} offset: [{:?}] end_pad: [{:?}]",
+                            data.rtcp(),
+                            data.payload_offset,
+                            data.payload_end_pad
+                        );
                         info!("SenderReport: {:?}", s);
                     }
                     rtcp::RtcpPacket::ReceiverReport(s) => {
@@ -445,16 +471,26 @@ impl EventHandler for Receiver {
                         // info!("ReceiverReport: {:?}", s);
                     }
                     rtcp::RtcpPacket::KnownType(_) => {
-                        info!("RTCP packet received: {:?} offset: [{:?}] end_pad: [{:?}]", data.rtcp(), data.payload_offset, data.payload_end_pad);
+                        info!(
+                            "RTCP packet received: {:?} offset: [{:?}] end_pad: [{:?}]",
+                            data.rtcp(),
+                            data.payload_offset,
+                            data.payload_end_pad
+                        );
                         info!("KnownType: {:?}", rtcp);
                     }
                     _ => {
-                        info!("RTCP packet received: {:?} offset: [{:?}] end_pad: [{:?}]", data.rtcp(), data.payload_offset, data.payload_end_pad);
+                        info!(
+                            "RTCP packet received: {:?} offset: [{:?}] end_pad: [{:?}]",
+                            data.rtcp(),
+                            data.payload_offset,
+                            data.payload_end_pad
+                        );
                         info!("Unknown RTCP packet: {:?}", rtcp);
                     }
                 }
                 // data.rtcp().
-            },
+            }
             // Ctx::RtpPacket(packet) => {
             //     // An event which fires for every received audio packet,
             //     // containing the decoded data.
@@ -488,7 +524,7 @@ impl EventHandler for Receiver {
             //             // songbird::packet::rtp::RtpType::Illegal(u) => format!("illegal({})", u),
             //             _ => "unknown",
             //         };
-                    
+
             //     info!(
             //         "Packet from SSRC [{}], sequence [{}], timestamp [{}] -- [{}]B long, CSRC count: [{}] CSRCs: [{:?}], PT: [{}], ext: [{}], marker: [{}]",
             //         rtp.get_ssrc(),
