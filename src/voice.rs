@@ -1,4 +1,7 @@
-use std::fs;
+use std::collections::HashSet;
+use std::fs::OpenOptions;
+use std::fs::{self};
+use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -6,7 +9,7 @@ use anyhow::Error;
 use chrono::{DateTime, Duration, Utc};
 use dashmap::DashMap;
 use hound::{SampleFormat, WavSpec, WavWriter};
-use log::{info, warn};
+use log::{error, info, warn};
 use reqwest::multipart::{Form, Part};
 use serenity::all::GuildId;
 use serenity::client::Context;
@@ -49,12 +52,13 @@ struct VoiceController {
     last_tick_was_empty: AtomicBool,
     known_ssrcs: DashMap<u32, UserId>,
     accumulator: DashMap<u32, Slice>,
+    lastTickSpeakers: Mutex<HashSet<u32>>,
     last_reply: Mutex<Option<VoiceReply>>,
 }
 
 #[derive(Clone)]
 struct Slice {
-    // user_id: u64,
+    user_id: Option<u64>,
     ssrc: u32,
     bytes: Vec<i16>,
     timestamp: DateTime<Utc>,
@@ -92,6 +96,7 @@ impl Receiver {
                 known_ssrcs: DashMap::new(),
                 accumulator: DashMap::new(),
                 last_reply: Mutex::new(None),
+                lastTickSpeakers: Mutex::new(HashSet::new()),
             }),
         }
     }
@@ -117,15 +122,22 @@ impl Receiver {
         // }
 
         // let filename = format!("cache/{}_{}.wav", slice.user_id, slice.timestamp.timestamp_millis());
-        info!(
-            "Saving file. slice.timestamp: [{}], slice.discord_timestamp: [{:?}]",
-            slice.timestamp.timestamp_millis(),
-            slice.first_discord_timestamp,
-        );
+        // info!(
+        //     "Saving file. slice.timestamp: [{}], slice.discord_timestamp: [{:?}]",
+        //     slice.timestamp.timestamp_millis(),
+        //     slice.first_discord_timestamp,
+        // );
+        let user_id_or_ssrc = if let Some(user_id) = slice.user_id {
+            user_id.to_string()
+        } else {
+            slice.ssrc.to_string()
+        };
+
         let filename = format!(
             "cache/{}_{}_{}.wav",
             // slice.user_id,
-            slice.ssrc,
+            // slice.ssrc,
+            user_id_or_ssrc,
             slice.timestamp.timestamp_millis(),
             slice.first_discord_timestamp,
         );
@@ -333,46 +345,76 @@ impl EventHandler for Receiver {
                 user_id: Some(user_id),
                 ..
             }) => {
-                info!("{:?} speaking; delay: {:#?}", ssrc, delay);
+                info!(
+                    "SSRC [{:?}] / user_id [{:?}] speaking; delay: {:#?}",
+                    ssrc, user_id, delay
+                );
 
                 self.controller.known_ssrcs.insert(*ssrc, *user_id);
 
-                self.controller.accumulator.entry(*ssrc).or_insert(Slice {
-                    // user_id: user_id.0,
-                    ssrc: *ssrc,
-                    bytes: Vec::new(),
-                    timestamp: Utc::now(),
-                    first_discord_timestamp: 0,
-                    last_discord_timestamp: 0,
-                });
+                self.controller
+                    .accumulator
+                    .entry(*ssrc)
+                    .and_modify(|slice| {
+                        slice.user_id = Some(user_id.0);
+                    })
+                    .or_insert(Slice {
+                        user_id: Some(user_id.0),
+                        ssrc: *ssrc,
+                        bytes: Vec::new(),
+                        timestamp: Utc::now(),
+                        first_discord_timestamp: 0,
+                        last_discord_timestamp: 0,
+                    });
+
+                // Append the SSRC and user ID to the file
+                let file_path = "cache/ssrc_userid_map.txt";
+                let mut file = OpenOptions::new()
+                    .append(true)
+                    .create(true)
+                    .open(file_path)
+                    .expect("Failed to open file");
+
+                let line = format!("{}:{}\n", ssrc, user_id.0);
+                file.write_all(line.as_bytes())
+                    .expect("Failed to write to file");
             }
             Ctx::VoiceTick(tick) => {
                 let speaking = tick.speaking.len();
                 // info!("VoiceTick: speaking: {}", speaking);
-                let last_tick_was_empty =
-                    self.controller.last_tick_was_empty.load(Ordering::SeqCst);
-                // info!("\tlast_tick_was_empty: {}", last_tick_was_empty);
+                // let last_tick_was_empty =
+                //     self.controller.last_tick_was_empty.load(Ordering::SeqCst);
 
-                if speaking == 0 && !last_tick_was_empty {
-                    info!("VoiceTick: store/process section...");
-                    self.controller
-                        .last_tick_was_empty
-                        .store(true, Ordering::SeqCst);
+                let previous_ssrcs = self.controller.lastTickSpeakers.lock().unwrap().clone();
+                let current_ssrcs: HashSet<u32> = tick.speaking.keys().copied().collect();
 
-                    for mut slice in self.controller.accumulator.iter_mut() {
-                        if slice.bytes.is_empty() {
-                            continue;
+                if let Ok(mut last_tick_speakers) = self.controller.lastTickSpeakers.lock() {
+                    *last_tick_speakers = current_ssrcs.iter().copied().collect();
+                }
+
+                let missing_ssrcs = previous_ssrcs.difference(&current_ssrcs);
+                let new_ssrcs = current_ssrcs.difference(&previous_ssrcs);
+
+                for ssrc in missing_ssrcs {
+                    info!("- [{}] stopped speaking, saving slice...", ssrc);
+                    if let Some(mut slice) = self.controller.accumulator.get_mut(&ssrc) {
+                        if slice.bytes.len() > 0 {
+                            if let Err(e) = self.process(&mut slice).await {
+                                error!("ERROR::: Processing error: {:?}", e);
+                            }
+                        } else {
+                            error!("ERROR::: VoiceTick: empty slice [{ssrc}]...");
                         }
-                        if let Err(e) = self.process(&mut slice).await {
-                            info!("Processing error: {:?}", e);
-                        }
+                    } else {
+                        error!("ERROR::: VoiceTick: missing slice [{ssrc}]...");
                     }
-                } else if speaking != 0 {
-                    // info!("VoiceTick: speaking... length: {}", speaking);
-                    self.controller
-                        .last_tick_was_empty
-                        .store(false, Ordering::SeqCst);
+                }
 
+                for ssrc in new_ssrcs {
+                    info!("+ [{}] started speaking", ssrc);
+                }
+
+                if speaking != 0 {
                     for (ssrc, data) in &tick.speaking {
                         // data.packet.
                         if let Some(decoded_voice) = data.decoded_voice.as_ref() {
@@ -393,11 +435,11 @@ impl EventHandler for Receiver {
                             let discord_timestamp = get_discord_timestamp(&data);
 
                             if let Some(mut slice) = self.controller.accumulator.get_mut(&ssrc) {
-                                info!(
-                                    "VoiceTick: appending bytes [{}]... length: {}",
-                                    ssrc,
-                                    bytes.len()
-                                );
+                                // info!(
+                                //     "VoiceTick: appending bytes [{}]... length: {}",
+                                //     ssrc,
+                                //     bytes.len()
+                                // );
 
                                 // let diff_from_last_timestamp: i32 = (discord_timestamp
                                 //     - slice.last_discord_timestamp)
@@ -413,14 +455,14 @@ impl EventHandler for Receiver {
                                 }
                                 // let diff_from_last_timestamp = (discord_timestamp > slice.last_discord_timestamp) ?
                                 //     discord_timestamp - slice.last_discord_timestamp : 0;
-                                warn!("diff_from_last_timestamp: [{:?}]", diff_from_last_timestamp);
+                                // warn!("diff_from_last_timestamp: [{:?}]", diff_from_last_timestamp);
 
                                 if diff_from_last_timestamp > 20 && slice.bytes.len() > 0 {
                                     // sometimes we get a tick that looks like it's continuous voice from before,
                                     // but it's actually a delayed / new speech segment.
                                     // Flush to file and start a new segment with accurate timestamps, to preserve
                                     // timing when consolidating into a single file.
-                                    info!("\tDiscord timestamp diff too large; clearing slice [{ssrc}]...");
+                                    info!("#\t[{ssrc}] - Discord timestamp diff too large; saving slice...");
 
                                     if let Err(e) = self.process(&mut slice).await {
                                         info!("Processing error: {:?}", e);
@@ -436,7 +478,7 @@ impl EventHandler for Receiver {
                                     // slice.bytes = bytes;
                                 } else if slice.bytes.len() >= (1920 * 50 * 10) {
                                     // 1920 samples per 20ms, 50 packets per second, 10 seconds
-                                    info!("\tSlice too long; clearing slice [{ssrc}]...");
+                                    info!("!\t[{ssrc}] Slice too long; clearing slice...");
                                     if let Err(e) = self.process(&mut slice).await {
                                         info!("Processing error: {:?}", e);
                                     }
@@ -444,7 +486,7 @@ impl EventHandler for Receiver {
 
                                 slice.bytes.append(&mut bytes);
                                 if slice.first_discord_timestamp == 0 {
-                                    info!("\tdiscord_timestamp 0; setting timestamps [{ssrc}]");
+                                    // info!("\tdiscord_timestamp 0; setting timestamps [{ssrc}]");
                                     if discord_timestamp > 0 {
                                         slice.first_discord_timestamp = discord_timestamp;
                                     }
@@ -455,12 +497,17 @@ impl EventHandler for Receiver {
                                 }
                             // } else if let Some(user_id) = self.controller.known_ssrcs.get(ssrc) {
                             } else {
-                                info!("VoiceTick: creating new slice [{ssrc}]...");
+                                let user_id = self
+                                    .controller
+                                    .known_ssrcs
+                                    .get(&ssrc)
+                                    .map(|entry| entry.value().0);
+                                info!("VoiceTick: creating new slice - ssrc [{ssrc}], user id [{:?}]...", user_id);
                                 // let discord_timestamp = data.packet.as_ref().unwrap().rtp().get_timestamp().0.into();
                                 self.controller.accumulator.insert(
                                     *ssrc,
                                     Slice {
-                                        // user_id: user_id.0,
+                                        user_id,
                                         ssrc: *ssrc,
                                         bytes,
                                         timestamp: Utc::now(),
@@ -469,6 +516,8 @@ impl EventHandler for Receiver {
                                     },
                                 );
                             }
+                        } else {
+                            info!("!#!#! VoiceTick: no decoded voice data [{ssrc}]...");
                         }
                     }
                 }

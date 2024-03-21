@@ -71,10 +71,12 @@ impl EventHandler for Bot {
 
         let content = msg.content.as_str().to_lowercase();
 
-        let mentioned = content.to_lowercase().contains("lowerechelonbot") || content.to_lowercase().contains("tardbot");
+        let mentioned = content.to_lowercase().contains("lowerechelonbot")
+            || content.to_lowercase().contains("tardbot");
         let dm = msg.is_private();
         let reply = if let Some(last) = self.get_last_2_msgs() {
-            last.0.author == msg.author.name && (last.1.author == "lowerechelonbot" || last.1.author == "tardbot")
+            last.0.author == msg.author.name
+                && (last.1.author == "lowerechelonbot" || last.1.author == "tardbot")
         } else {
             false
         };
@@ -89,9 +91,9 @@ impl EventHandler for Bot {
         } else if content.contains("join") {
             self.join_channel(&ctx, &msg).await;
         } else if content.contains("leave") {
-            // self.send_msg(&ctx, &msg, "fine then").await;
-            self.send_msg(&ctx, &msg, "no way, I'm staying").await;
-            // self.leave_channel(&ctx, &msg).await;
+            self.send_msg(&ctx, &msg, "fine then").await;
+            // self.send_msg(&ctx, &msg, "no way, I'm staying").await;
+            self.leave_channel(&ctx, &msg).await;
         } else {
             self.gen_msg(&ctx, &msg).await;
         }
