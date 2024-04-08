@@ -31,11 +31,16 @@ def parse_ssrc_user_map():
         print(f"Error reading file '{ssrc_userid_map_file}'.")
 
     # Update the SSRC to user ID mappings with usernames
+    final_map = {}
+    
     for ssrc, user_id in ssrc_userid_map.items():
         if user_id in userid_username_map:
-            ssrc_userid_map[ssrc] = userid_username_map[user_id]
+            final_map[ssrc] = userid_username_map[user_id]
+            final_map[user_id] = userid_username_map[user_id]
+        else:
+            final_map[ssrc] = user_id
 
-    return ssrc_userid_map
+    return final_map
 
 
 def get_user_identifier(ssrc, ssrc_userid_map):
